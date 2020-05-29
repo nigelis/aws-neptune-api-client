@@ -18,4 +18,12 @@ type Transport interface {
 
 // API contains the AWS Neptune APIs.
 type API struct {
+	CreateLoader CreateLoader
+}
+
+// New creates new API.
+func New(t Transport) *API {
+	return &API{
+		CreateLoader: newCreateLoaderFunc(t),
+	}
 }
