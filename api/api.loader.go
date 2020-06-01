@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -11,38 +12,105 @@ import (
 	"strings"
 )
 
+func newCancelLoaderFunc(t Transport) CancelLoader {
+	return func(input *CancelLoaderInput) error {
+		return input.Do(context.Background(), t)
+	}
+}
+
+// CancelLoader cancels the load job.
+type CancelLoader func(*CancelLoaderInput) error
+
+// CancelLoaderInput configures the loader cancel job request.
+type CancelLoaderInput struct {
+	LoadID *string
+}
+
+// Do executes the request and returns response or error.
+func (input *CancelLoaderInput) Do(ctx context.Context, t Transport) error {
+	var (
+		method string
+		path   strings.Builder
+	)
+
+	method = "DELETE"
+
+	path.WriteRune('/')
+	path.WriteString("loader")
+
+	req, err := http.NewRequest(method, path.String(), http.NoBody)
+	if err != nil {
+		return err
+	}
+
+	u := req.URL
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return err
+	}
+	if input.LoadID == nil {
+		return errors.New("loadId is required")
+	}
+	q.Set("loadId", *input.LoadID)
+	u.RawQuery = q.Encode()
+
+	if ctx != nil {
+		req = req.WithContext(ctx)
+	}
+
+	resp, err := t.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	buf, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var e Error
+	if err = json.Unmarshal(buf, &e); err != nil {
+		return err
+	}
+	return &e
+}
+
 func newCreateLoaderFunc(t Transport) CreateLoader {
 	return func(input *CreateLoaderInput) (*CreateLoaderOutput, error) {
 		return input.Do(context.Background(), t)
 	}
 }
 
-// CreateLoader creates the loader task.
+// CreateLoader creates a load job.
 type CreateLoader func(*CreateLoaderInput) (*CreateLoaderOutput, error)
 
-// CreateLoaderInput defines the parameters for the loader request.
+// CreateLoaderInput configures the loader request.
 type CreateLoaderInput struct {
-	Source                            *string              `json:"source,omitempty"`
-	Format                            *string              `json:"format,omitempty"`
-	IAMRoleArn                        *string              `json:"iamRoleArn,omitempty"`
-	Mode                              *string              `json:"mode,omitempty"`
-	Region                            *string              `json:"region,omitempty"`
-	FailOnError                       *string              `json:"failOnError,omitempty"`
-	Parallelism                       *string              `json:"parallelism,omitempty"`
-	ParserConfiguration               *ParserConfiguration `json:"parserConfiguration,omitempty"`
-	UpdateSingleCardinalityProperties *string              `json:"updateSingleCardinalityProperties,omitempty"`
-	QueueRequest                      *string              `json:"queueRequest,omitempty"`
-	Dependencies                      []*string            `json:"dependencies,omitempty"`
+	Source                            *string                          `json:"source,omitempty"`
+	Format                            *string                          `json:"format,omitempty"`
+	IAMRoleArn                        *string                          `json:"iamRoleArn,omitempty"`
+	Mode                              *string                          `json:"mode,omitempty"`
+	Region                            *string                          `json:"region,omitempty"`
+	FailOnError                       *string                          `json:"failOnError,omitempty"`
+	Parallelism                       *string                          `json:"parallelism,omitempty"`
+	ParserConfiguration               *CreateLoaderParserConfiguration `json:"parserConfiguration,omitempty"`
+	UpdateSingleCardinalityProperties *string                          `json:"updateSingleCardinalityProperties,omitempty"`
+	QueueRequest                      *string                          `json:"queueRequest,omitempty"`
+	Dependencies                      []*string                        `json:"dependencies,omitempty"`
 }
 
-// ParserConfiguration defines additional parser configuration values.
-type ParserConfiguration struct {
+// CreateLoaderParserConfiguration configures additional parser configuration values.
+type CreateLoaderParserConfiguration struct {
 	BaseURI       *string `json:"baseUri,omitempty"`
 	NamedGraphURI *string `json:"namedGraphUri,omitempty"`
 }
 
-// Do CreateLoader request with context and transport.
-func (r *CreateLoaderInput) Do(ctx context.Context, transport Transport) (*CreateLoaderOutput, error) {
+// Do executes the request and returns response or error.
+func (input *CreateLoaderInput) Do(ctx context.Context, t Transport) (*CreateLoaderOutput, error) {
 	var (
 		method string
 		path   strings.Builder
@@ -54,7 +122,7 @@ func (r *CreateLoaderInput) Do(ctx context.Context, transport Transport) (*Creat
 	path.WriteRune('/')
 	path.WriteString("loader")
 
-	buf, err := json.Marshal(r)
+	buf, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +141,7 @@ func (r *CreateLoaderInput) Do(ctx context.Context, transport Transport) (*Creat
 		req = req.WithContext(ctx)
 	}
 
-	resp, err := transport.Perform(req)
+	resp, err := t.Perform(req)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +178,7 @@ type CreateLoaderOutputPayload struct {
 	LoadID *string `json:"loadId,omitempty"`
 }
 
-// GetLoaderInput defines the parameters for the Neptune Loader Get-Status request.
+// GetLoaderInput configures the get status request.
 type GetLoaderInput struct {
 	LoadID             *string
 	Details            *string
@@ -121,7 +189,8 @@ type GetLoaderInput struct {
 	IncludeQueuedLoads *string
 }
 
-func (i *GetLoaderInput) Do(ctx context.Context, transport Transport) (*GetLoaderOutput, error) {
+// Do executes the request and returns response or error.
+func (i *GetLoaderInput) Do(ctx context.Context, t Transport) (*GetLoaderOutput, error) {
 	var (
 		method string
 		path   strings.Builder
@@ -137,11 +206,11 @@ func (i *GetLoaderInput) Do(ctx context.Context, transport Transport) (*GetLoade
 		return nil, err
 	}
 
-	q, err := url.ParseQuery(req.URL.RawQuery)
+	u := req.URL
+	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return nil, err
 	}
-
 	if i.LoadID != nil {
 		q.Add("loadId", *i.LoadID)
 	}
@@ -163,12 +232,13 @@ func (i *GetLoaderInput) Do(ctx context.Context, transport Transport) (*GetLoade
 	if i.IncludeQueuedLoads != nil {
 		q.Add("includeQueuedLoads", *i.IncludeQueuedLoads)
 	}
+	u.RawQuery = q.Encode()
 
 	if ctx != nil {
 		req = req.WithContext(ctx)
 	}
 
-	resp, err := transport.Perform(req)
+	resp, err := t.Perform(req)
 	if err != nil {
 		return nil, err
 	}
